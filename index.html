@@ -203,8 +203,10 @@ $("#modal").addEventListener("click",e=>{ if(e.target.id==="modal") $("#m_cancel
 
 /* ---------- Persistenz ---------- */
 function load(){
-  try{ const d=JSON.parse(localStorage.getItem(STORE_KEY)); if(d && d.projects) return d; }catch(e){}
-  return { projects:[], pins:{}, cProj:null, cPlan:null };
+  try{ const d=JSON.parse(localStorage.getItem(STORE_KEY)); if(d && d.projects && d.projects.length) return d; }catch(e){}
+  const pid=uid(), plid=uid();
+  const d={ projects:[{id:pid,name:"Standard",plans:[{id:plid,name:"Beispiel-Plan",img:DEFAULT_PLAN}]}], pins:{}, cProj:pid, cPlan:plid };
+  d.pins[plid]=[]; return d;
 }
 function save(){
   try{ localStorage.setItem(STORE_KEY, JSON.stringify(db)); }
@@ -215,7 +217,7 @@ function note(t){ const n=$("#savednote"); if(n) n.textContent=t; }
 
 /* ---------- Zugriffshelfer ---------- */
 function curProject(){ return db.projects.find(p=>p.id===db.cProj) || db.projects[0]; }
-function curPlan(){ const p=curProject(); return (p.plans||[]).find(x=>x.id===db.cPlan) || (p.plans||[])[0]; }
+function curPlan(){ const p=curProject(); if(!p) return null; return (p.plans||[]).find(x=>x.id===db.cPlan) || (p.plans||[])[0]; }
 function curPins(){ const pl=curPlan(); if(!pl) return []; if(!db.pins[pl.id]) db.pins[pl.id]=[]; return db.pins[pl.id]; }
 function grundrissTag(){ const p=curProject(), pl=curPlan(); return pl ? (p.name+" · "+pl.name) : ""; }
 
@@ -223,14 +225,14 @@ function grundrissTag(){ const p=curProject(), pl=curPlan(); return pl ? (p.name
 function renderSelectors(){
   $("#projSel").innerHTML = db.projects.map(p=>'<option value="'+p.id+'"'+(p.id===db.cProj?" selected":"")+'>'+esc(p.name)+'</option>').join("");
   const p=curProject();
-  $("#planSel").innerHTML = (p.plans||[]).map(x=>'<option value="'+x.id+'"'+(x.id===db.cPlan?" selected":"")+'>'+esc(x.name)+'</option>').join("")
+  $("#planSel").innerHTML = ((p&&p.plans)||[]).map(x=>'<option value="'+x.id+'"'+(x.id===db.cPlan?" selected":"")+'>'+esc(x.name)+'</option>').join("")
     || '<option value="">— kein Grundriss —</option>';
 }
 
 /* ---------- Grundriss anzeigen ---------- */
 function loadPlan(){
   const pl=curPlan();
-  $("#planTitle").textContent = pl ? (curProject().name+" · "+pl.name) : "Grundriss";
+  $("#planTitle").textContent = (pl&&curProject()) ? (curProject().name+" · "+pl.name) : "Grundriss";
   if(!pl || !pl.img){
     planbox.innerHTML='<div class="empty"><div style="font-size:34px">🏗️</div><div>Kein Grundriss. „＋ Grundriss" oben.</div></div>';
     renderAll(); return;
@@ -274,7 +276,7 @@ async function loadPlansFromNotion(){
       const nm=o.grundriss||"Grundriss"; const id=idFor(p.name,nm,0); p.plans.push({id,name:nm,img:o.bild,fromNotion:true}); newPins[id]=(db.pins&&db.pins[id])||[];
     }
   }
-  db.projects=projs; db.pins=newPins;
+  if(projs.length){ db.projects=projs; db.pins=newPins; }
   if(!db.projects.find(p=>p.id===db.cProj)) db.cProj=(projs[0]||{}).id||null;
   const cp=curProject(); if(cp){ if(!cp.plans.find(x=>x.id===db.cPlan)) db.cPlan=(cp.plans[0]||{}).id||null; } else { db.cPlan=null; }
   sel=null; save(); renderSelectors(); loadPlan();
