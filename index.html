@@ -63,6 +63,7 @@
   .filebtn{ display:inline-block; padding:7px 10px; border:1px dashed var(--linie); border-radius:8px; font-size:12px; cursor:pointer; color:var(--grau); }
   input[type=file]{ display:none; }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -117,7 +118,8 @@ const N8N_WRITE       = "https://hofmann-haus.app.n8n.cloud/webhook/baustellen-m
 const N8N_READ_MANGEL = "https://hofmann-haus.app.n8n.cloud/webhook/baustellen-mangel-read";
 const N8N_READ_PLAN   = "https://hofmann-haus.app.n8n.cloud/webhook/grundrisse-read";
 const SECRET          = "hofmann-mangel-8Wc3Kp9Z";
-const VERSION         = "NEUBAU v1";
+const VERSION         = "NEUBAU v2 (PDF)";
+if(window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
 const GEWERKE = ["","Rohbau","Estrich","Trockenbau","Fliesen","Maler","Elektro","Sanitär","Heizung","Fenster","Türen","Bodenbelag","Dach","Fassade","Aufzug","Außenanlage","Sonstiges"];
 const RAEUME  = ["Sonstiges","Wohnen/Essen/Kochen","Schlafen","Kind","Bad","Gäste-WC","Diele","Flur","Abstell","Technik","Balkon/Terrasse","Keller","Treppenhaus","Aufzug","Außen"];
@@ -125,7 +127,7 @@ const HAEUSER = ["","A","B","C","D","E"];
 
 /* ============ ZUSTAND ============ */
 let PLANS = [];          // [{projekt, name, img}]
-let MANGEL = [];         // [{id, mangel, beschreibung, raum, status, posX, posY, grundriss, gewerk, haus, wohnung, foto, planausschnitt, datum, _neu}]
+let MANGEL = [];
 let curProjekt = "";
 let curPlanName = "";
 let selId = null;
@@ -183,6 +185,10 @@ async function ladePlaene(){
       .filter(x => x && (x.bild || x.grundriss))
       .map(x => ({ projekt:(x.projekt||"").trim(), name:(x.grundriss||"Grundriss").trim(), img:x.bild||"" }));
     if(!PLANS.length){ $("planStatus").textContent = "Keine Grundrisse in Notion gefunden."; renderProjektSelect(); renderPlan(); return; }
+    // PDFs erkennen (auch wenn n8n sie als jpeg etikettiert) und zu Bild rendern
+    const pdfAnzahl = PLANS.filter(p => istPdf(p.img)).length;
+    if(pdfAnzahl){ $("planStatus").textContent = "Wandle "+pdfAnzahl+" PDF-Plan/Pläne um …"; }
+    for(const p of PLANS){ if(istPdf(p.img)){ try{ p.img = await pdfNachBild(p.img); }catch(e){ console.warn("PDF-Render fehlgeschlagen:", p.name, e); p.img=""; } } }
     if(!PLANS.some(p => (p.projekt||"—")===(curProjekt||"—"))) curProjekt = PLANS[0].projekt;
     renderProjektSelect();
     if(!plansImProjekt().some(p => p.name===curPlanName)) waehleErstenPlan();
@@ -439,6 +445,27 @@ function applyTransform(){ $("planinner").style.transform = `translate(${panX}px
   box.addEventListener("pointermove", e => { if(!dragging) return; panX=ox+(e.clientX-sx); panY=oy+(e.clientY-sy); applyTransform(); });
   window.addEventListener("pointerup", () => dragging=false);
 })();
+
+/* ============ PDF-ERKENNUNG + RENDERING ============ */
+function istPdf(d){
+  if(typeof d!=="string") return false;
+  const i = d.indexOf(","); if(i<0) return false;
+  return d.slice(i+1, i+6) === "JVBER";   // %PDF -> base64 beginnt mit "JVBER"
+}
+async function pdfNachBild(dataUrl){
+  if(!window.pdfjsLib) throw new Error("PDF.js nicht geladen");
+  const b64 = dataUrl.slice(dataUrl.indexOf(",")+1);
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
+  const pdf = await pdfjsLib.getDocument({ data:arr }).promise;
+  const page = await pdf.getPage(1);
+  const vp = page.getViewport({ scale:2 });
+  const cv = document.createElement("canvas");
+  cv.width = vp.width; cv.height = vp.height;
+  await page.render({ canvasContext:cv.getContext("2d"), viewport:vp }).promise;
+  return cv.toDataURL("image/png");
+}
 
 /* ============ HELFER ============ */
 function stKlasse(s){ if(/bearb/i.test(s)) return "bearb"; if(s==="behoben") return "behoben"; return "offen"; }
