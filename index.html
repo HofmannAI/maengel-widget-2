@@ -31,12 +31,14 @@
   .hinweis{ padding:10px 12px; font-size:13px; color:var(--grau); }
   .leer{ padding:40px 16px; text-align:center; color:var(--grau); }
   .leer .em{ font-size:34px; display:block; margin-bottom:8px; }
-  .pin{ position:absolute; transform:translate(-50%,-100%); font-size:12px; font-weight:700; color:#fff;
-        width:24px; height:24px; border-radius:50% 50% 50% 0; background:var(--rot); rotate:45deg;
+  .pin{ position:absolute; width:0; height:0; }
+  .pin .scaler{ position:absolute; left:0; top:0; transform-origin:0 0; }
+  .pin .marker{ position:absolute; left:-12px; top:-29px; width:24px; height:24px;
+        border-radius:50% 50% 50% 0; transform:rotate(45deg); background:var(--rot);
         display:flex; align-items:center; justify-content:center; box-shadow:0 1px 4px rgba(0,0,0,.4); cursor:pointer; }
-  .pin span{ rotate:-45deg; }
-  .pin.offen{ background:#c0182c; } .pin.bearb{ background:#d97706; } .pin.behoben{ background:#16a34a; }
-  .pin.aktiv{ outline:3px solid #000; outline-offset:1px; }
+  .pin .marker span{ transform:rotate(-45deg); color:#fff; font-weight:700; font-size:12px; }
+  .pin.offen .marker{ background:#c0182c; } .pin.bearb .marker{ background:#d97706; } .pin.behoben .marker{ background:#16a34a; }
+  .pin.aktiv .marker{ outline:3px solid #000; outline-offset:1px; }
   .zoombar{ position:absolute; right:8px; bottom:8px; display:flex; gap:4px; }
   .zoombar .btn{ width:36px; height:36px; padding:0; font-size:19px; display:flex; align-items:center; justify-content:center; background:#fff; box-shadow:0 1px 4px rgba(0,0,0,.15); }
   .detail{ padding:12px; display:grid; gap:8px; }
@@ -118,7 +120,7 @@ const N8N_WRITE       = "https://hofmann-haus.app.n8n.cloud/webhook/baustellen-m
 const N8N_READ_MANGEL = "https://hofmann-haus.app.n8n.cloud/webhook/baustellen-mangel-read";
 const N8N_READ_PLAN   = "https://hofmann-haus.app.n8n.cloud/webhook/grundrisse-read";
 const SECRET          = "hofmann-mangel-8Wc3Kp9Z";
-const VERSION         = "NEUBAU v3";
+const VERSION         = "NEUBAU v4";
 if(window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
 const GEWERKE = ["","Rohbau","Estrich","Trockenbau","Fliesen","Maler","Elektro","Sanitär","Heizung","Fenster","Türen","Bodenbelag","Dach","Fassade","Aufzug","Außenanlage","Sonstiges"];
@@ -305,7 +307,7 @@ function zeichnePins(){
     el.style.left = m.posX + "%";
     el.style.top  = m.posY + "%";
     el.dataset.id = m.id;
-    el.innerHTML = '<span>'+(i+1)+'</span>';
+    el.innerHTML = '<div class="scaler" style="transform:scale('+(1/scale)+')"><div class="marker"><span>'+(i+1)+'</span></div></div>';
     inner.appendChild(el);
   });
 }
@@ -337,6 +339,7 @@ function applyTransform(){
     ty=Math.max(Math.min(0,bh-sh), Math.min(0,ty));
   }
   inner.style.transform = "translate("+tx+"px,"+ty+"px) scale("+scale+")";
+  inner.querySelectorAll(".pin .scaler").forEach(s => s.style.transform = "scale("+(1/scale)+")");
 }
 function zoomAtAbsolute(cx, cy, ns){
   ns = clampScale(ns);
