@@ -163,7 +163,7 @@ const N8N_WEBHOOK      = "https://hofmann-haus.app.n8n.cloud/webhook/baustellen-
 const N8N_READ_WEBHOOK = "https://hofmann-haus.app.n8n.cloud/webhook/baustellen-mangel-read";
 const GRUNDRISS_READ_WEBHOOK = "https://hofmann-haus.app.n8n.cloud/webhook/grundrisse-read";
 const SECRET = "hofmann-mangel-8Wc3Kp9Z";
-const STORE_KEY = "hofmann_cockpit_v2";
+const STORE_KEY = "hofmann_cockpit_v3";
 
 const RAEUME = ["Diele","Flur","Schlafen","Kind","Bad","WC","Wohnen/Essen/Kochen","Abstell","Dachterrasse","Sonstiges"];
 const GEWERKE=["","Tiefbau","Rohbau","Flachdach","Dämmung","Gerüstbau","Fenster","Maler","Elektro","Sanitär/Heizung","Trockenbau","Fliesenleger","Estrich","Parkett","Türen","Schreiner","Schlosser","Außenanlagen","Pflasterarbeiten","Gärtner","Aufzug"];
@@ -203,10 +203,8 @@ $("#modal").addEventListener("click",e=>{ if(e.target.id==="modal") $("#m_cancel
 
 /* ---------- Persistenz ---------- */
 function load(){
-  try{ const d=JSON.parse(localStorage.getItem(STORE_KEY)); if(d && d.projects && d.projects.length) return d; }catch(e){}
-  const planId=uid(), projId=uid();
-  const d={ projects:[{id:projId, name:"Vista Stettenfels", plans:[{id:planId, name:"Penthouse B.08", img:DEFAULT_PLAN}]}], pins:{}, cProj:projId, cPlan:planId };
-  d.pins[planId]=[]; return d;
+  try{ const d=JSON.parse(localStorage.getItem(STORE_KEY)); if(d && d.projects) return d; }catch(e){}
+  return { projects:[], pins:{}, cProj:null, cPlan:null };
 }
 function save(){
   try{ localStorage.setItem(STORE_KEY, JSON.stringify(db)); }
@@ -256,24 +254,34 @@ $("#projSel").onchange=e=>{ db.cProj=e.target.value; const p=curProject(); db.cP
 }
 async function loadPlansFromNotion(){
   if(!GRUNDRISS_READ_WEBHOOK) return;
+  note("Pläne werden aus Notion geladen…");
+  let arr;
   try{
     const r=await fetch(GRUNDRISS_READ_WEBHOOK,{method:"POST",body:new URLSearchParams({})});
-    if(!r.ok) return;
-    const rows=await r.json(); const arr=Array.isArray(rows)?rows:(rows.results||[]);
-    let added=0;
-    for(const o of arr){
-      if(!o.bild) continue;
-      const projName=o.projekt||"Ohne Projekt";
-      let proj=db.projects.find(p=>p.name===projName);
-      if(!proj){ proj={id:uid(),name:projName,plans:[]}; db.projects.push(proj); }
-      if(o.bild.indexOf("data:application/pdf")===0){
-        const pages=await pdfDataUrlToPages(o.bild);
-        pages.forEach((img,i)=>{ const nm=pages.length>1?(o.grundriss+" · Seite "+(i+1)):o.grundriss; if(!proj.plans.find(x=>x.name===nm)){ const id=uid(); proj.plans.push({id,name:nm,img,fromNotion:true}); if(!db.pins[id])db.pins[id]=[]; added++; } });
-      } else {
-        if(!proj.plans.find(x=>x.name===o.grundriss)){ const id=uid(); proj.plans.push({id,name:o.grundriss,img:o.bild,fromNotion:true}); if(!db.pins[id])db.pins[id]=[]; added++; }
-      }
+    if(!r.ok){ note("Fehler "+r.status+" beim Laden der Pläne."); return; }
+    const rows=await r.json(); arr=Array.isArray(rows)?rows:(rows.results||[]);
+  }catch(e){ note("Netzwerkfehler beim Laden der Pläne."); return; }
+  const idFor=(a,b,i)=>("np_"+a+"_"+b+"_"+i).replace(/[^a-zA-Z0-9_]/g,"-").slice(0,60);
+  const projs=[]; const byName={}; const newPins={};
+  function proj(name){ if(!byName[name]){ byName[name]={id:idFor(name,"proj",0),name,plans:[]}; projs.push(byName[name]); } return byName[name]; }
+  for(const o of arr){
+    if(!o.bild) continue;
+    const p=proj(o.projekt||"Ohne Projekt");
+    if(o.bild.indexOf("data:application/pdf")===0){
+      const pages=await pdfDataUrlToPages(o.bild);
+      pages.forEach((img,i)=>{ const nm=pages.length>1?(o.grundriss+" · Seite "+(i+1)):o.grundriss; const id=idFor(p.name,nm,i); p.plans.push({id,name:nm,img,fromNotion:true}); newPins[id]=(db.pins&&db.pins[id])||[]; });
+    } else {
+      const nm=o.grundriss||"Grundriss"; const id=idFor(p.name,nm,0); p.plans.push({id,name:nm,img:o.bild,fromNotion:true}); newPins[id]=(db.pins&&db.pins[id])||[];
     }
-    if(added>0){ if(!curPlan() && db.projects[0] && db.projects[0].plans[0]){ db.cProj=db.projects[0].id; db.cPlan=db.projects[0].plans[0].id; } save(); let ctx={haus:"",raum:"Sonstiges",wohnung:""};
+  }
+  db.projects=projs; db.pins=newPins;
+  if(!db.projects.find(p=>p.id===db.cProj)) db.cProj=(projs[0]||{}).id||null;
+  const cp=curProject(); if(cp){ if(!cp.plans.find(x=>x.id===db.cPlan)) db.cPlan=(cp.plans[0]||{}).id||null; } else { db.cPlan=null; }
+  sel=null; save(); renderSelectors(); loadPlan();
+  const total=projs.reduce((n,p)=>n+p.plans.length,0);
+  note(total?("Pläne aktualisiert: "+total+" Grundrisse."):"Keine Grundrisse in Notion angelegt.");
+}
+let ctx={haus:"",raum:"Sonstiges",wohnung:""};
 function fillTopSelects(){
   if(!$("#t_haus"))return;
   $("#t_haus").innerHTML=HAEUSER.map(h=>'<option value="'+h+'">'+(h?h:"Haus –")+'</option>').join("");
@@ -289,10 +297,7 @@ function syncTop(){ const m=curPins().find(x=>x.id===sel); const src=m||ctx; if(
 fillTopSelects();
 renderSelectors(); loadPlan();
 if($("#planRefresh"))$("#planRefresh").onclick=()=>loadPlansFromNotion();
-if($("#listhd"))$("#listhd").onclick=()=>{ const l=$("#list"),n=$("#savednote"); const hide=l.style.display!=="none"; l.style.display=hide?"none":""; if(n)n.style.display=hide?"none":""; }; note("Pläne aus Notion geladen ("+added+")."); }
-  }catch(e){}
-}
-renderSelectors(); loadPlan();
+if($("#listhd"))$("#listhd").onclick=()=>{ const l=$("#list"),n=$("#savednote"); const hide=l.style.display!=="none"; l.style.display=hide?"none":""; if(n)n.style.display=hide?"none":""; };
 loadPlansFromNotion(); };
 $("#planSel").onchange=e=>{ db.cPlan=e.target.value; sel=null; save(); loadPlan(); };
 
