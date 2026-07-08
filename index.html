@@ -15,7 +15,7 @@
   .zaehler{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
   .chip{ font-size:12px; padding:4px 10px; border-radius:999px; background:var(--hell); border:1px solid var(--linie); }
   .chip .dot{ display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:5px; vertical-align:middle; }
-  .toolbar{ display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
+  .toolbar{ display:flex; gap:6px; flex-wrap:wrap; align-items:flex-end; margin-bottom:12px; }
   .toolbar label{ font-size:11px; color:var(--grau); display:flex; flex-direction:column; gap:2px; }
   select,input,textarea{ font-family:inherit; font-size:14px; padding:7px 9px; border:1px solid var(--linie); border-radius:8px; background:#fff; }
   select{ min-width:120px; }
@@ -25,8 +25,8 @@
   .btn.klein{ padding:6px 9px; font-size:12px; }
   .karte{ border:1px solid var(--linie); border-radius:12px; overflow:hidden; margin-bottom:14px; }
   .karte-kopf{ padding:10px 12px; font-weight:600; font-size:14px; display:flex; align-items:center; gap:8px; border-bottom:1px solid var(--linie); }
-  .planbox{ position:relative; background:var(--hell); overflow:hidden; touch-action:none; }
-  .planinner{ position:relative; transform-origin:0 0; transition:transform .12s; }
+  .planbox{ position:relative; background:var(--hell); overflow:hidden; touch-action:none; cursor:crosshair; }
+  .planinner{ position:relative; transform-origin:0 0; }
   .planinner img{ display:block; width:100%; height:auto; user-select:none; -webkit-user-drag:none; }
   .hinweis{ padding:10px 12px; font-size:13px; color:var(--grau); }
   .leer{ padding:40px 16px; text-align:center; color:var(--grau); }
@@ -38,7 +38,7 @@
   .pin.offen{ background:#c0182c; } .pin.bearb{ background:#d97706; } .pin.behoben{ background:#16a34a; }
   .pin.aktiv{ outline:3px solid #000; outline-offset:1px; }
   .zoombar{ position:absolute; right:8px; bottom:8px; display:flex; gap:4px; }
-  .zoombar .btn{ width:34px; height:34px; padding:0; font-size:18px; display:flex; align-items:center; justify-content:center; }
+  .zoombar .btn{ width:36px; height:36px; padding:0; font-size:19px; display:flex; align-items:center; justify-content:center; background:#fff; box-shadow:0 1px 4px rgba(0,0,0,.15); }
   .detail{ padding:12px; display:grid; gap:8px; }
   .detail .reihe{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }
   .detail label{ font-size:11px; color:var(--grau); display:flex; flex-direction:column; gap:3px; }
@@ -80,13 +80,13 @@
     <label>Haus<select id="selHaus"></select></label>
     <label>Raum<select id="selRaum"></select></label>
     <label>Wohnung<select id="selWohnung"></select></label>
-    <button class="btn klein" id="btnPlaene" style="align-self:flex-end">⟳ Pläne</button>
-    <button class="btn klein" id="btnMangel" style="align-self:flex-end">⟳ Mängel</button>
+    <button class="btn klein" id="btnPlaene">⟳ Pläne</button>
+    <button class="btn klein" id="btnMangel">⟳ Mängel</button>
   </div>
 
   <div class="karte">
     <div class="karte-kopf">📍 <span id="planTitel">Grundriss</span></div>
-    <div class="hinweis" id="planHinweis">Tippe auf den Plan, um an dieser Stelle einen Mangel zu setzen.</div>
+    <div class="hinweis" id="planHinweis">Tippe auf den Plan, um an dieser Stelle einen Mangel zu setzen. Mausrad / zwei Finger = Zoom.</div>
     <div class="planbox" id="planbox">
       <div class="planinner" id="planinner"></div>
       <div class="zoombar">
@@ -118,7 +118,7 @@ const N8N_WRITE       = "https://hofmann-haus.app.n8n.cloud/webhook/baustellen-m
 const N8N_READ_MANGEL = "https://hofmann-haus.app.n8n.cloud/webhook/baustellen-mangel-read";
 const N8N_READ_PLAN   = "https://hofmann-haus.app.n8n.cloud/webhook/grundrisse-read";
 const SECRET          = "hofmann-mangel-8Wc3Kp9Z";
-const VERSION         = "NEUBAU v2 (PDF)";
+const VERSION         = "NEUBAU v3";
 if(window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
 const GEWERKE = ["","Rohbau","Estrich","Trockenbau","Fliesen","Maler","Elektro","Sanitär","Heizung","Fenster","Türen","Bodenbelag","Dach","Fassade","Aufzug","Außenanlage","Sonstiges"];
@@ -126,22 +126,34 @@ const RAEUME  = ["Sonstiges","Wohnen/Essen/Kochen","Schlafen","Kind","Bad","Gäs
 const HAEUSER = ["","A","B","C","D","E"];
 
 /* ============ ZUSTAND ============ */
-let PLANS = [];          // [{projekt, name, img}]
+let PLANS = [];
 let MANGEL = [];
 let curProjekt = "";
 let curPlanName = "";
 let selId = null;
-let zoom = 1, panX = 0, panY = 0;
+let scale = 1, tx = 0, ty = 0;
 let ctx = { haus:"", raum:"Sonstiges", wohnung:"" };
 
 const $ = id => document.getElementById(id);
 
 /* ============ START ============ */
-window.addEventListener("DOMContentLoaded", () => {
+window.addEventListener("DOMContentLoaded", async () => {
   console.log("WIDGET " + VERSION + " geladen");
   fuelleStatischeSelects();
   bindeEvents();
-  ladePlaene().then(ladeMangel);
+  initInteraktion();
+  const cp = await cacheGet("plans");
+  const cm = await cacheGet("mangel");
+  if(cp && Array.isArray(cp) && cp.length){
+    PLANS = cp;
+    if(cm && Array.isArray(cm)) MANGEL = cm;
+    if(!PLANS.some(p => (p.projekt||"")===curProjekt)) curProjekt = PLANS[0].projekt||"";
+    renderProjektSelect(); waehleErstenPlan(); renderPlanSelect(); renderPlan(); renderZaehler();
+    $("planStatus").innerHTML = "Aus Cache · "+PLANS.length+" Pläne, "+MANGEL.length+" Mängel. <b>⟳</b> zum Aktualisieren.";
+  } else {
+    await ladePlaene();
+    await ladeMangel();
+  }
 });
 
 function fuelleStatischeSelects(){
@@ -155,14 +167,14 @@ function fuelleStatischeSelects(){
 function bindeEvents(){
   $("btnPlaene").onclick  = () => ladePlaene().then(ladeMangel);
   $("btnMangel").onclick  = ladeMangel;
-  $("selProjekt").onchange = e => { curProjekt = e.target.value; waehleErstenPlan(); renderPlanSelect(); renderPlan(); };
-  $("selPlan").onchange    = e => { curPlanName = e.target.value; selId=null; renderPlan(); };
+  $("selProjekt").onchange = e => { curProjekt = e.target.value; waehleErstenPlan(); renderPlanSelect(); resetZoom(); renderPlan(); };
+  $("selPlan").onchange    = e => { curPlanName = e.target.value; selId=null; resetZoom(); renderPlan(); };
   $("selHaus").onchange    = e => ctx.haus = e.target.value;
   $("selRaum").onchange    = e => ctx.raum = e.target.value;
   $("selWohnung").onchange = e => ctx.wohnung = e.target.value;
-  $("zPlus").onclick  = () => setZoom(zoom*1.25);
-  $("zMinus").onclick = () => setZoom(zoom/1.25);
-  $("zReset").onclick = () => { zoom=1; panX=0; panY=0; applyTransform(); };
+  $("zPlus").onclick  = () => { const b=$("planbox"); zoomBy(b.clientWidth/2, b.clientHeight/2, 1.35); };
+  $("zMinus").onclick = () => { const b=$("planbox"); zoomBy(b.clientWidth/2, b.clientHeight/2, 1/1.35); };
+  $("zReset").onclick = () => resetZoom(true);
   $("listeKopf").onclick = () => { $("listeKopf").classList.toggle("zu"); $("liste").style.display = $("listeKopf").classList.contains("zu")?"none":"block"; };
 }
 
@@ -185,7 +197,6 @@ async function ladePlaene(){
       .filter(x => x && (x.bild || x.grundriss))
       .map(x => ({ projekt:(x.projekt||"").trim(), name:(x.grundriss||"Grundriss").trim(), img:x.bild||"" }));
     if(!PLANS.length){ $("planStatus").textContent = "Keine Grundrisse in Notion gefunden."; renderProjektSelect(); renderPlan(); return; }
-    // PDFs erkennen (auch wenn n8n sie als jpeg etikettiert) und zu Bild rendern
     const pdfAnzahl = PLANS.filter(p => istPdf(p.img)).length;
     if(pdfAnzahl){ $("planStatus").textContent = "Wandle "+pdfAnzahl+" PDF-Plan/Pläne um …"; }
     for(const p of PLANS){ if(istPdf(p.img)){ try{ p.img = await pdfNachBild(p.img); }catch(e){ console.warn("PDF-Render fehlgeschlagen:", p.name, e); p.img=""; } } }
@@ -193,7 +204,8 @@ async function ladePlaene(){
     renderProjektSelect();
     if(!plansImProjekt().some(p => p.name===curPlanName)) waehleErstenPlan();
     renderPlanSelect();
-    renderPlan();
+    resetZoom(); renderPlan();
+    cacheSet("plans", PLANS);
     $("planStatus").textContent = PLANS.length + " Grundriss(e) geladen.";
   }catch(e){
     $("planStatus").innerHTML = '<span class="fehler">Grundrisse konnten nicht geladen werden: '+e.message+'</span>';
@@ -217,10 +229,31 @@ async function ladeMangel(){
     }));
     selId=null;
     renderPlan(); renderZaehler();
+    cacheSet("mangel", MANGEL);
     $("planStatus").textContent = MANGEL.length + " Mangel/Mängel geladen.";
   }catch(e){
     $("planStatus").innerHTML = '<span class="fehler">Mängel konnten nicht geladen werden: '+e.message+'</span>';
   }
+}
+
+/* ============ CACHE (IndexedDB) ============ */
+let _db = null;
+function idb(){
+  return new Promise((res,rej) => {
+    if(_db) return res(_db);
+    const r = indexedDB.open("hofmann_maengel", 1);
+    r.onupgradeneeded = () => { if(!r.result.objectStoreNames.contains("kv")) r.result.createObjectStore("kv"); };
+    r.onsuccess = () => { _db = r.result; res(_db); };
+    r.onerror   = () => rej(r.error);
+  });
+}
+async function cacheGet(k){
+  try{ const db=await idb(); return await new Promise(res => { const t=db.transaction("kv","readonly").objectStore("kv").get(k); t.onsuccess=()=>res(t.result); t.onerror=()=>res(null); }); }
+  catch(e){ return null; }
+}
+async function cacheSet(k,v){
+  try{ const db=await idb(); return await new Promise(res => { const t=db.transaction("kv","readwrite").objectStore("kv").put(v,k); t.onsuccess=()=>res(true); t.onerror=()=>res(false); }); }
+  catch(e){ return false; }
 }
 
 /* ============ AUSWAHL-HILFEN ============ */
@@ -257,8 +290,7 @@ function renderPlan(){
   $("planHinweis").style.display = "block";
   inner.innerHTML = '<img id="planimg" src="'+p.img+'" alt="Grundriss">';
   const img = $("planimg");
-  img.onload = () => { zeichnePins(); };
-  img.onclick = onPlanClick;
+  img.onload = () => zeichnePins();
   if(img.complete) zeichnePins();
   applyTransform();
   renderListe(); renderZaehler();
@@ -272,18 +304,13 @@ function zeichnePins(){
     el.className = "pin " + stKlasse(m.status) + (m.id===selId?" aktiv":"");
     el.style.left = m.posX + "%";
     el.style.top  = m.posY + "%";
+    el.dataset.id = m.id;
     el.innerHTML = '<span>'+(i+1)+'</span>';
-    el.onclick = ev => { ev.stopPropagation(); selId=m.id; renderPlan(); oeffneDetail(m); scrollDetail(); };
     inner.appendChild(el);
   });
 }
 
-function onPlanClick(ev){
-  const p = curPlan(); if(!p) return;
-  const img = $("planimg");
-  const rect = img.getBoundingClientRect();
-  const x = ((ev.clientX - rect.left) / rect.width) * 100;
-  const y = ((ev.clientY - rect.top) / rect.height) * 100;
+function neuenPinSetzen(x, y){
   const neu = {
     id:"neu", mangel:"", beschreibung:"", raum:ctx.raum||"Sonstiges", status:"offen",
     posX:Math.round(x*100)/100, posY:Math.round(y*100)/100, grundriss:curPlanName,
@@ -296,6 +323,110 @@ function onPlanClick(ev){
   scrollDetail();
 }
 
+/* ============ INTERAKTION: Zoom / Pan / Tap ============ */
+function clampScale(s){ return Math.max(1, Math.min(6, s)); }
+function resetZoom(apply){ scale=1; tx=0; ty=0; if(apply) applyTransform(); }
+function applyTransform(){
+  const box=$("planbox"), inner=$("planinner");
+  if(!box || !inner) return;
+  const bw=box.clientWidth, bh=box.clientHeight || inner.offsetHeight || 1;
+  if(scale<=1){ scale=1; tx=0; ty=0; }
+  else{
+    const sw=bw*scale, sh=(inner.offsetHeight||bh)*scale;
+    tx=Math.max(Math.min(0,bw-sw), Math.min(0,tx));
+    ty=Math.max(Math.min(0,bh-sh), Math.min(0,ty));
+  }
+  inner.style.transform = "translate("+tx+"px,"+ty+"px) scale("+scale+")";
+}
+function zoomAtAbsolute(cx, cy, ns){
+  ns = clampScale(ns);
+  if(Math.abs(ns-scale)<0.0001) return;
+  tx = cx - (cx - tx) * (ns/scale);
+  ty = cy - (cy - ty) * (ns/scale);
+  scale = ns;
+  applyTransform();
+}
+function zoomBy(cx, cy, factor){ zoomAtAbsolute(cx, cy, scale*factor); }
+
+function initInteraktion(){
+  const box = $("planbox");
+  const pointers = new Map();
+  let g = { mode:null, moved:false, downTarget:null, sx:0, sy:0, stx:0, sty:0, sdist:0, sscale:1 };
+  const dist = (a,b) => Math.hypot(a.x-b.x, a.y-b.y);
+
+  box.addEventListener("wheel", e => {
+    e.preventDefault();
+    const rect = box.getBoundingClientRect();
+    zoomBy(e.clientX-rect.left, e.clientY-rect.top, e.deltaY<0 ? 1.15 : 1/1.15);
+  }, { passive:false });
+
+  box.addEventListener("dblclick", e => {
+    e.preventDefault();
+    const rect = box.getBoundingClientRect();
+    zoomBy(e.clientX-rect.left, e.clientY-rect.top, scale<2 ? 1.9 : 1/2.6);
+  });
+
+  box.addEventListener("pointerdown", e => {
+    pointers.set(e.pointerId, { x:e.clientX, y:e.clientY });
+    try{ box.setPointerCapture(e.pointerId); }catch(_){}
+    if(pointers.size===1){
+      g.mode="pan"; g.moved=false; g.downTarget=e.target;
+      g.stx=tx; g.sty=ty; g.sx=e.clientX; g.sy=e.clientY;
+    } else if(pointers.size===2){
+      const p=[...pointers.values()];
+      g.mode="pinch"; g.moved=true; g.sdist=dist(p[0],p[1]); g.sscale=scale;
+    }
+  });
+
+  box.addEventListener("pointermove", e => {
+    if(!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, { x:e.clientX, y:e.clientY });
+    const pts=[...pointers.values()];
+    if(g.mode==="pinch" && pts.length>=2){
+      const d=dist(pts[0],pts[1]);
+      if(g.sdist>0){
+        const rect=box.getBoundingClientRect();
+        const mx=(pts[0].x+pts[1].x)/2-rect.left, my=(pts[0].y+pts[1].y)/2-rect.top;
+        zoomAtAbsolute(mx, my, g.sscale * d/g.sdist);
+      }
+      return;
+    }
+    if(g.mode==="pan"){
+      const dx=e.clientX-g.sx, dy=e.clientY-g.sy;
+      if(Math.hypot(dx,dy)>6) g.moved=true;
+      if(scale>1){ tx=g.stx+dx; ty=g.sty+dy; applyTransform(); }
+    }
+  });
+
+  const ende = e => {
+    if(pointers.has(e.pointerId)) pointers.delete(e.pointerId);
+    if(pointers.size===0){
+      if(g.mode==="pan" && !g.moved) tapAuf(e, g.downTarget);
+      g.mode=null;
+    } else if(pointers.size===1){
+      const only=[...pointers.values()][0];
+      g.mode="pan"; g.moved=true; g.stx=tx; g.sty=ty; g.sx=only.x; g.sy=only.y;
+    }
+  };
+  box.addEventListener("pointerup", ende);
+  box.addEventListener("pointercancel", ende);
+}
+
+function tapAuf(e, target){
+  const pin = target && target.closest ? target.closest(".pin") : null;
+  if(pin){
+    const m = MANGEL.find(x => x.id===pin.dataset.id);
+    if(m){ selId=m.id; renderPlan(); oeffneDetail(m); scrollDetail(); }
+    return;
+  }
+  const img = $("planimg"); if(!img) return;
+  const rect = img.getBoundingClientRect();
+  if(e.clientX<rect.left || e.clientX>rect.right || e.clientY<rect.top || e.clientY>rect.bottom) return;
+  const x = ((e.clientX-rect.left)/rect.width)*100;
+  const y = ((e.clientY-rect.top)/rect.height)*100;
+  neuenPinSetzen(x, y);
+}
+
 /* ============ DETAIL-FORMULAR ============ */
 function oeffneDetail(m){
   $("detailKarte").style.display = "block";
@@ -305,7 +436,7 @@ function oeffneDetail(m){
     <label>Beschreibung<textarea id="fBeschr" placeholder="Details …">${esc(m.beschreibung)}</textarea></label>
     <div class="reihe">
       <label>Raum<select id="fRaum">${RAEUME.map(r=>`<option${r===m.raum?" selected":""}>${r}</option>`).join("")}</select></label>
-      <label>Gewerk<select id="fGewerk">${GEWERKE.map(g=>`<option value="${g}"${g===m.gewerk?" selected":""}>${g||"–"}</option>`).join("")}</select></label>
+      <label>Gewerk<select id="fGewerk">${GEWERKE.map(gw=>`<option value="${gw}"${gw===m.gewerk?" selected":""}>${gw||"–"}</option>`).join("")}</select></label>
     </div>
     <div class="reihe">
       <label>Haus<select id="fHaus">${HAEUSER.map(h=>`<option value="${h}"${h===m.haus?" selected":""}>${h||"–"}</option>`).join("")}</select></label>
@@ -332,11 +463,16 @@ function oeffneDetail(m){
 
   let fotoData = m.foto || "";
   $("fotoBtn").onclick = () => $("fFoto").click();
-  $("fFoto").onchange = ev => {
+  $("fFoto").onchange = async ev => {
     const f = ev.target.files[0]; if(!f) return;
-    const rd = new FileReader();
-    rd.onload = () => { fotoData = rd.result; $("fotoVorschau").innerHTML = '<img src="'+fotoData+'" style="max-width:120px;margin-top:6px;border-radius:8px">'; };
-    rd.readAsDataURL(f);
+    $("fotoVorschau").innerHTML = '<span style="font-size:12px;color:var(--grau)">Foto wird verarbeitet …</span>';
+    try{
+      fotoData = await bildKomprimieren(f);
+      $("fotoVorschau").innerHTML = '<img src="'+fotoData+'" style="max-width:120px;margin-top:6px;border-radius:8px">';
+    }catch(e){
+      try{ fotoData = await dateiAlsDataURL(f); $("fotoVorschau").innerHTML = '<img src="'+fotoData+'" style="max-width:120px;margin-top:6px;border-radius:8px">'; }
+      catch(_){ fotoData=""; $("fotoVorschau").innerHTML = '<span style="color:var(--rot);font-size:12px">Foto konnte nicht geladen werden</span>'; }
+    }
   };
   $("btnAbbrechen").onclick = () => { MANGEL = MANGEL.filter(x=>x.id!=="neu"); selId=null; $("detailKarte").style.display="none"; renderPlan(); };
   $("btnSpeichern").onclick = () => speichern(m, () => fotoData);
@@ -368,9 +504,7 @@ async function speichern(m, getFoto){
     planausschnitt:"",
     secret:SECRET
   };
-  try{
-    daten.planausschnitt = await macheAusschnitt(m.posX, m.posY);
-  }catch(e){ daten.planausschnitt=""; }
+  try{ daten.planausschnitt = await macheAusschnitt(m.posX, m.posY); }catch(e){ daten.planausschnitt=""; }
   try{
     const r = await post(N8N_WRITE, daten);
     if(!r.ok) throw new Error("HTTP "+r.status);
@@ -385,9 +519,35 @@ async function speichern(m, getFoto){
   }
 }
 
+/* ============ FOTO-KOMPRIMIERUNG ============ */
+function dateiAlsDataURL(file){
+  return new Promise((res,rej) => { const rd=new FileReader(); rd.onload=()=>res(rd.result); rd.onerror=()=>rej(new Error("Lesefehler")); rd.readAsDataURL(file); });
+}
+function bildKomprimieren(file){
+  return new Promise((res,rej) => {
+    const rd = new FileReader();
+    rd.onerror = () => rej(new Error("Datei-Lesefehler"));
+    rd.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const max=1600;
+        let w=img.naturalWidth, h=img.naturalHeight;
+        if(!w || !h){ return rej(new Error("keine Bildmaße")); }
+        if(w>max || h>max){ const s=Math.min(max/w, max/h); w=Math.round(w*s); h=Math.round(h*s); }
+        const cv=document.createElement("canvas"); cv.width=w; cv.height=h;
+        cv.getContext("2d").drawImage(img, 0,0, w,h);
+        res(cv.toDataURL("image/jpeg", 0.82));
+      };
+      img.onerror = () => rej(new Error("Bild-Dekodierfehler"));
+      img.src = rd.result;
+    };
+    rd.readAsDataURL(file);
+  });
+}
+
 /* ============ PLANAUSSCHNITT (Crop mit Pin) ============ */
 function macheAusschnitt(px, py){
-  return new Promise((resolve,reject) => {
+  return new Promise((resolve) => {
     const p = curPlan(); if(!p || !p.img) return resolve("");
     const img = new Image();
     img.onload = () => {
@@ -397,11 +557,11 @@ function macheAusschnitt(px, py){
         let sx=Math.round(W*px/100 - cw/2), sy=Math.round(H*py/100 - ch/2);
         sx=Math.max(0,Math.min(sx,W-cw)); sy=Math.max(0,Math.min(sy,H-ch));
         const cv=document.createElement("canvas"); cv.width=cw; cv.height=ch;
-        const g=cv.getContext("2d");
-        g.drawImage(img, sx,sy,cw,ch, 0,0,cw,ch);
+        const gg=cv.getContext("2d");
+        gg.drawImage(img, sx,sy,cw,ch, 0,0,cw,ch);
         const pinX=W*px/100 - sx, pinY=H*py/100 - sy;
-        g.fillStyle="#c0182c"; g.strokeStyle="#fff"; g.lineWidth=Math.max(2,cw/120);
-        g.beginPath(); g.arc(pinX,pinY,Math.max(8,cw/28),0,Math.PI*2); g.fill(); g.stroke();
+        gg.fillStyle="#c0182c"; gg.strokeStyle="#fff"; gg.lineWidth=Math.max(2,cw/120);
+        gg.beginPath(); gg.arc(pinX,pinY,Math.max(8,cw/28),0,Math.PI*2); gg.fill(); gg.stroke();
         resolve(cv.toDataURL("image/png"));
       }catch(e){ resolve(""); }
     };
@@ -435,16 +595,6 @@ function renderZaehler(){
     <span class="chip"><span class="dot" style="background:#16a34a"></span>Behoben: ${c}</span>
     <span class="chip">Σ ${MANGEL.length}</span>`;
 }
-
-/* ============ ZOOM/PAN ============ */
-function setZoom(z){ zoom=Math.max(1,Math.min(4,z)); applyTransform(); }
-function applyTransform(){ $("planinner").style.transform = `translate(${panX}px,${panY}px) scale(${zoom})`; }
-(function initPan(){
-  const box=$("planbox"); let dragging=false, sx=0, sy=0, ox=0, oy=0;
-  box.addEventListener("pointerdown", e => { if(zoom<=1) return; dragging=true; sx=e.clientX; sy=e.clientY; ox=panX; oy=panY; });
-  box.addEventListener("pointermove", e => { if(!dragging) return; panX=ox+(e.clientX-sx); panY=oy+(e.clientY-sy); applyTransform(); });
-  window.addEventListener("pointerup", () => dragging=false);
-})();
 
 /* ============ PDF-ERKENNUNG + RENDERING ============ */
 function istPdf(d){
