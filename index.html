@@ -120,7 +120,7 @@ const N8N_WRITE       = "https://hofmann-haus.app.n8n.cloud/webhook/baustellen-m
 const N8N_READ_MANGEL = "https://hofmann-haus.app.n8n.cloud/webhook/baustellen-mangel-read";
 const N8N_READ_PLAN   = "https://hofmann-haus.app.n8n.cloud/webhook/grundrisse-read";
 const SECRET          = "hofmann-mangel-8Wc3Kp9Z";
-const VERSION         = "NEUBAU v4";
+const VERSION         = "NEUBAU v5";
 if(window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
 const GEWERKE = ["","Rohbau","Estrich","Trockenbau","Fliesen","Maler","Elektro","Sanitär","Heizung","Fenster","Türen","Bodenbelag","Dach","Fassade","Aufzug","Außenanlage","Sonstiges"];
@@ -141,11 +141,12 @@ const $ = id => document.getElementById(id);
 /* ============ START ============ */
 window.addEventListener("DOMContentLoaded", async () => {
   console.log("WIDGET " + VERSION + " geladen");
+  try{ if(navigator.storage && navigator.storage.persist) navigator.storage.persist(); }catch(e){}
   fuelleStatischeSelects();
   bindeEvents();
   initInteraktion();
-  const cp = await cacheGet("plans");
-  const cm = await cacheGet("mangel");
+  const cp = await cacheLadePlans();
+  const cm = await cacheLadeMangel();
   if(cp && Array.isArray(cp) && cp.length){
     PLANS = cp;
     if(cm && Array.isArray(cm)) MANGEL = cm;
@@ -207,7 +208,7 @@ async function ladePlaene(){
     if(!plansImProjekt().some(p => p.name===curPlanName)) waehleErstenPlan();
     renderPlanSelect();
     resetZoom(); renderPlan();
-    cacheSet("plans", PLANS);
+    cacheStorePlans();
     $("planStatus").textContent = PLANS.length + " Grundriss(e) geladen.";
   }catch(e){
     $("planStatus").innerHTML = '<span class="fehler">Grundrisse konnten nicht geladen werden: '+e.message+'</span>';
@@ -231,7 +232,7 @@ async function ladeMangel(){
     }));
     selId=null;
     renderPlan(); renderZaehler();
-    cacheSet("mangel", MANGEL);
+    cacheStoreMangel();
     $("planStatus").textContent = MANGEL.length + " Mangel/Mängel geladen.";
   }catch(e){
     $("planStatus").innerHTML = '<span class="fehler">Mängel konnten nicht geladen werden: '+e.message+'</span>';
@@ -256,6 +257,52 @@ async function cacheGet(k){
 async function cacheSet(k,v){
   try{ const db=await idb(); return await new Promise(res => { const t=db.transaction("kv","readwrite").objectStore("kv").put(v,k); t.onsuccess=()=>res(true); t.onerror=()=>res(false); }); }
   catch(e){ return false; }
+}
+
+/* localStorage-Cache (überlebt in App-Webviews meist besser als IndexedDB) */
+function jpegVerkleinern(dataUrl, maxW, q){
+  return new Promise((res,rej) => {
+    const im = new Image();
+    im.onload = () => {
+      let w=im.naturalWidth, h=im.naturalHeight;
+      if(!w || !h){ return rej(new Error("keine Maße")); }
+      if(w>maxW){ const s=maxW/w; w=Math.round(w*s); h=Math.round(h*s); }
+      const cv=document.createElement("canvas"); cv.width=w; cv.height=h;
+      cv.getContext("2d").drawImage(im, 0,0, w,h);
+      res(cv.toDataURL("image/jpeg", q));
+    };
+    im.onerror = () => rej(new Error("Bildfehler"));
+    im.src = dataUrl;
+  });
+}
+async function komprimierePlanBilder(plans){
+  const out=[];
+  for(const p of plans){
+    let img=p.img;
+    if(img && img.length>180000){ try{ img = await jpegVerkleinern(img, 1500, 0.72); }catch(e){} }
+    out.push({ projekt:p.projekt, name:p.name, img });
+  }
+  return out;
+}
+async function cacheStorePlans(){
+  try{
+    const komp = await komprimierePlanBilder(PLANS);
+    try{ localStorage.setItem("hh_plans", JSON.stringify(komp)); }
+    catch(e){ try{ localStorage.removeItem("hh_plans"); }catch(_){} }
+    cacheSet("plans", komp);
+  }catch(e){ cacheSet("plans", PLANS); }
+}
+function cacheStoreMangel(){
+  try{ localStorage.setItem("hh_mangel", JSON.stringify(MANGEL)); }catch(e){}
+  cacheSet("mangel", MANGEL);
+}
+async function cacheLadePlans(){
+  try{ const s=localStorage.getItem("hh_plans"); if(s){ const a=JSON.parse(s); if(Array.isArray(a) && a.length) return a; } }catch(e){}
+  const v = await cacheGet("plans"); return (Array.isArray(v) && v.length) ? v : null;
+}
+async function cacheLadeMangel(){
+  try{ const s=localStorage.getItem("hh_mangel"); if(s){ const a=JSON.parse(s); if(Array.isArray(a)) return a; } }catch(e){}
+  const v = await cacheGet("mangel"); return Array.isArray(v) ? v : null;
 }
 
 /* ============ AUSWAHL-HILFEN ============ */
